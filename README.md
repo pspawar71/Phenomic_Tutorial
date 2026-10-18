@@ -14,7 +14,7 @@ Expected RGB band order: Red, Green, Blue.
 ## Binder link
 
 ```text
-https://mybinder.org/v2/gh/YOUR_USERNAME/YOUR_REPOSITORY/main?urlpath=proxy/3838/
+https://mybinder.org/v2/gh/pspawar71/Phenomic_Tutorial/main?urlpath=proxy/3838/
 ```
 
 ## Enhanced interactivity
