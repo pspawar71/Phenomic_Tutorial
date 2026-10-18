@@ -178,25 +178,9 @@ terra::res(rgb)
 terra::ext(rgb)
 terra::crs(rgb)
 ```
-
 ---
 
-## Activity 2: Name and compare RGB bands
-
-```{r compare-bands, exercise=TRUE}
-rgb <- rgb_raw
-names(rgb) <- c("Red", "Green", "Blue")
-
-par(mfrow = c(1, 3))
-plot(rgb[["Red"]], col = hcl.colors(100, "Reds"), main = "Red band")
-plot(rgb[["Green"]], col = hcl.colors(100, "Greens"), main = "Green band")
-plot(rgb[["Blue"]], col = hcl.colors(100, "Blues"), main = "Blue band")
-par(mfrow = c(1, 1))
-```
-
----
-
-## Activity 3: Display the RGB composite
+## Activity 2: Display the RGB composite
 
 ```{r rgb-composite, exercise=TRUE}
 rgb <- rgb_raw
@@ -209,6 +193,20 @@ terra::plotRGB(
   stretch = "lin",
   main = "RGB True-Color Orthomosaic"
 )
+```
+---
+
+## Activity 3: Name and compare RGB bands
+
+```{r compare-bands, exercise=TRUE}
+rgb <- rgb_raw
+names(rgb) <- c("Red", "Green", "Blue")
+
+par(mfrow = c(1, 3))
+plot(rgb[["Red"]], col = hcl.colors(100, "Reds"), main = "Red band")
+plot(rgb[["Green"]], col = hcl.colors(100, "Greens"), main = "Green band")
+plot(rgb[["Blue"]], col = hcl.colors(100, "Blues"), main = "Blue band")
+par(mfrow = c(1, 1))
 ```
 
 ---
