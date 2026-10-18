@@ -1,26 +1,37 @@
-# From RGB Pixels to Plot-Level Crop Traits
+# Lightweight Phenomic Tutorial
 
-A self-paced `learnr` tutorial using an RGB orthomosaic, Green Leaf Index, Otsu segmentation, vegetation masking, plot boundaries, and plot-level trait extraction.
+A `learnr` tutorial for RGB orthomosaic analysis and plot-level GLI traits.
 
-## Required files
+## Interactivity retained
+
+- Shiny/learnr guided interface
+- Plotly GLI histogram
+- Plotly plot-level chart
+- DT trait table
+- Leaflet vector-only plot-boundary map
+
+## Removed
+
+- `leafem`
+- Interactive RGB rasters
+- Interactive GLI rasters
+- Raster overlays in Leaflet
+
+## Required data
 
 ```text
 data/rgb_orthomosaic.tif
 data/plot_boundaries.geojson
 ```
 
-Expected RGB band order: Red, Green, Blue.
-
-## Binder link
+## Student Binder link
 
 ```text
-https://mybinder.org/v2/gh/pspawar71/Phenomic_Tutorial/main?urlpath=proxy/3838/
+https://mybinder.org/v2/gh/pspawar71/Phenomic_Tutorial/HEAD?urlpath=proxy/3838/
 ```
 
-## Enhanced interactivity
+## Instructor RStudio link
 
-- Full zoom and pan for the RGB composite and all derived layers
-- Pixel-click RGB and GLI inspection
-- Formula builder with selectable bands, coefficients, and operators
-- Toggleable GLI, vegetation mask, vegetation-only GLI, and plot boundaries
-- Executable learnr R exercises for reproducible analysis
+```text
+https://mybinder.org/v2/gh/pspawar71/Phenomic_Tutorial/HEAD?urlpath=rstudio
+```
