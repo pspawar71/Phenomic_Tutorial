@@ -23,7 +23,7 @@ terraOptions(progress = 0)
 # Raster calculations can require more time in Binder.
 learnr::tutorial_options(
   exercise.eval = FALSE,
-  exercise.timelimit = 180
+  exercise.timelimit = 300
 )
 
 # Resolve paths from the tutorial location instead of the RStudio working directory.
