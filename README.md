@@ -12,7 +12,7 @@ data/plot_boundaries.geojson
 ## Binder JupyterLab link
 
 ```text
-https://mybinder.org/v2/gh/YOUR_USERNAME/YOUR_REPOSITORY/main?labpath=RGB_GLI_Plot_Traits.ipynb
+https://mybinder.org/v2/gh/pspawar71/Phenomic_Tutorial/main?labpath=RGB_GLI_Plot_Traits.ipynb
 ```
 
 ## Local use
