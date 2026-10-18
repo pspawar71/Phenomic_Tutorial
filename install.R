@@ -10,10 +10,7 @@ packages <- c(
   "learnr",
   "terra",
   "exactextractr",
-  "sf",
-  "leaflet",
-  "plotly",
-  "DT"
+  "sf"
 )
 
 missing <- packages[
