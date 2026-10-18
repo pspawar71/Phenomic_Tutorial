@@ -412,7 +412,7 @@ cat("Trait table saved to:", trait_table_path, "\n")
 
 ---
 
-## Activity 10: Mean Vegetation GLI Heatmap
+## Activity 11: Mean Vegetation GLI Heatmap
 
 In this activity, visualize mean vegetation GLI for each study plot by overlaying transparent colors on the RGB orthomosaic.
 
@@ -504,7 +504,7 @@ par(mar = c(5.1, 4.1, 4.1, 2.1), xpd = FALSE)
 ```
 
 
-## Activity 11: Canopy Cover Heatmap
+## Activity 12: Canopy Cover Heatmap
 
 ```{r activity-11-canopy-heatmap, exercise=TRUE, exercise.timelimit=300}
 if (!file.exists(trait_table_path)) {
