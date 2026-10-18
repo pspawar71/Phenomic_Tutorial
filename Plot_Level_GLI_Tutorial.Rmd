@@ -1,0 +1,865 @@
+---
+title: "From RGB Pixels to Plot-Level Crop Traits"
+subtitle: "A Self-Paced RGB Orthomosaic and Green Leaf Index Tutorial"
+author: "Hands-On Remote Sensing and High-Throughput Phenotyping"
+output:
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+runtime: shiny_prerendered
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+library(shiny)
+library(terra)
+library(sf)
+library(leaflet)
+library(leafem)
+library(plotly)
+library(DT)
+
+options(width = 100)
+terraOptions(progress = 0)
+
+orthomosaic_path <- "data/rgb_orthomosaic.tif"
+plots_path <- "data/plot_boundaries.geojson"
+
+if (!file.exists(orthomosaic_path)) stop("Missing data/rgb_orthomosaic.tif")
+if (!file.exists(plots_path)) stop("Missing data/plot_boundaries.geojson")
+
+rgb_raw <- terra::rast(orthomosaic_path)
+plots_raw <- terra::vect(plots_path)
+
+if (terra::nlyr(rgb_raw) < 3) {
+  stop("The RGB orthomosaic must contain at least three bands.")
+}
+
+# Use the first three bands. Expected order: Red, Green, Blue.
+rgb_raw <- rgb_raw[[1:3]]
+names(rgb_raw) <- c("Red", "Green", "Blue")
+
+plot_id_candidates <- c("plot_id", "Plot_ID", "plot", "Plot", "id", "ID")
+plot_id_matches <- plot_id_candidates[plot_id_candidates %in% names(plots_raw)]
+
+if (length(plot_id_matches) == 0) {
+  plots_raw$plot_id <- paste0("Plot_", seq_len(nrow(plots_raw)))
+  plot_id_field <- "plot_id"
+} else {
+  plot_id_field <- plot_id_matches[[1]]
+}
+
+safe_gli <- function(red, green, blue) {
+  denominator <- 2 * green + red + blue
+  terra::ifel(
+    denominator == 0,
+    NA,
+    (2 * green - red - blue) / denominator
+  )
+}
+
+calculate_otsu_threshold <- function(raster, sample_size = 100000, bins = 256) {
+  requested_size <- min(sample_size, terra::ncell(raster))
+  sampled <- terra::spatSample(
+    raster,
+    size = requested_size,
+    method = "regular",
+    na.rm = TRUE,
+    values = TRUE
+  )
+
+  pixel_values <- as.numeric(sampled[, 1])
+  pixel_values <- pixel_values[is.finite(pixel_values)]
+
+  if (length(pixel_values) < 2) {
+    stop("Not enough valid GLI values for Otsu thresholding.")
+  }
+
+  h <- hist(pixel_values, breaks = bins, plot = FALSE)
+  probabilities <- h$counts / sum(h$counts)
+  cumulative_probability <- cumsum(probabilities)
+  cumulative_mean <- cumsum(probabilities * h$mids)
+  total_mean <- sum(probabilities * h$mids)
+  denominator <- cumulative_probability * (1 - cumulative_probability)
+
+  between_class_variance <-
+    (total_mean * cumulative_probability - cumulative_mean)^2 / denominator
+  between_class_variance[!is.finite(between_class_variance)] <- NA_real_
+
+  h$mids[which.max(between_class_variance)]
+}
+
+make_aligned_plots <- function(raster, polygons) {
+  if (is.na(terra::crs(raster, proj = TRUE)) || !nzchar(terra::crs(raster, proj = TRUE))) {
+    stop("The RGB orthomosaic does not contain a valid coordinate reference system.")
+  }
+
+  if (is.na(terra::crs(polygons, proj = TRUE)) || !nzchar(terra::crs(polygons, proj = TRUE))) {
+    stop("The plot boundary layer does not contain a valid coordinate reference system.")
+  }
+
+  if (!terra::same.crs(raster, polygons)) {
+    polygons <- terra::project(polygons, terra::crs(raster))
+  }
+
+  polygons
+}
+```
+
+## Welcome
+
+This self-paced workflow converts RGB orthomosaic pixels into plot-level crop traits.
+
+### Learning objectives
+
+1. Inspect and interactively visualize an RGB orthomosaic.
+2. Assign Red, Green, and Blue band names.
+3. Calculate the Green Leaf Index (GLI).
+4. Calculate an Otsu threshold from the GLI distribution.
+5. Create a binary vegetation segmentation mask.
+6. Mask non-vegetation pixels from the RGB orthomosaic and GLI layer.
+7. Overlay experimental plot boundaries.
+8. Extract mean vegetation GLI and canopy cover for every plot.
+9. Export a plot-level crop-trait table.
+
+> **Important:** This tutorial assumes the band order is Red, Green, Blue. Verify the band order from the image or camera metadata before using another dataset.
+
+---
+
+## Activity 1: Inspect the RGB orthomosaic
+
+A raster is a grid of cells. Each RGB cell contains Red, Green, and Blue values.
+
+```{r inspect-raster, exercise=TRUE}
+rgb <- rgb_raw
+
+rgb
+terra::nlyr(rgb)
+terra::res(rgb)
+terra::ext(rgb)
+terra::crs(rgb)
+```
+
+```{r inspect-raster-solution}
+rgb <- rgb_raw
+
+print(rgb)
+cat("Number of bands:", terra::nlyr(rgb), "\n")
+cat("Rows and columns:", terra::nrow(rgb), "x", terra::ncol(rgb), "\n")
+cat("Resolution:", paste(terra::res(rgb), collapse = " x "), "\n")
+cat("Extent:", paste(c(terra::xmin(rgb), terra::xmax(rgb), terra::ymin(rgb), terra::ymax(rgb)), collapse = ", "), "\n")
+cat("CRS:", terra::crs(rgb), "\n")
+```
+
+### Interactive band viewer
+
+```{r band-viewer-ui, echo=FALSE}
+selectInput(
+  "viewer_band",
+  "Select an RGB band",
+  choices = c("Red" = 1, "Green" = 2, "Blue" = 3)
+)
+leafletOutput("band_map", height = "520px")
+```
+
+```{r band-viewer-server, context="server", echo=FALSE}
+output$band_map <- renderLeaflet({
+  selected_band <- rgb_raw[[as.integer(input$viewer_band)]]
+  band_values <- terra::values(selected_band, mat = FALSE)
+  finite_values <- band_values[is.finite(band_values)]
+  palette <- leaflet::colorNumeric("viridis", domain = finite_values, na.color = "transparent")
+
+  leaflet() |>
+    addProviderTiles(providers$CartoDB.Positron) |>
+    leaflet::addRasterImage(
+      selected_band,
+      colors = palette,
+      opacity = 0.85,
+      project = TRUE,
+      group = "Selected band"
+    ) |>
+    addLegend(
+      pal = palette,
+      values = finite_values,
+      title = names(rgb_raw)[as.integer(input$viewer_band)]
+    )
+})
+```
+
+### Reflection
+
+- Which visible band provides the strongest contrast between green vegetation and soil?
+- Where are plots, alleys, shadows, residue, and missing plants visible?
+
+---
+
+## Activity 2: Name the RGB bands
+
+```{r name-bands-ui, echo=FALSE}
+fluidRow(
+  column(4, selectInput("band1_name", "Band 1", c("Red", "Green", "Blue"), "Red")),
+  column(4, selectInput("band2_name", "Band 2", c("Red", "Green", "Blue"), "Green")),
+  column(4, selectInput("band3_name", "Band 3", c("Red", "Green", "Blue"), "Blue"))
+)
+uiOutput("band_name_check")
+```
+
+```{r name-bands-server, context="server", echo=FALSE}
+selected_band_names <- reactive({
+  c(input$band1_name, input$band2_name, input$band3_name)
+})
+
+output$band_name_check <- renderUI({
+  selected <- selected_band_names()
+
+  if (length(unique(selected)) != 3) {
+    return(div(class = "alert alert-warning", "Assign Red, Green, and Blue exactly once."))
+  }
+
+  if (identical(selected, c("Red", "Green", "Blue"))) {
+    return(div(class = "alert alert-success", "Correct band order: Red, Green, Blue."))
+  }
+
+  div(class = "alert alert-warning", paste("Selected order:", paste(selected, collapse = ", ")))
+})
+```
+
+```{r name-bands, exercise=TRUE}
+rgb <- rgb_raw
+names(rgb) <- c("Red", "Green", "Blue")
+names(rgb)
+```
+
+---
+
+## Activity 3: Display the RGB true-color composite
+
+```{r rgb-composite, exercise=TRUE}
+rgb <- rgb_raw
+names(rgb) <- c("Red", "Green", "Blue")
+
+terra::plotRGB(
+  rgb,
+  r = 1,
+  g = 2,
+  b = 3,
+  stretch = "lin",
+  main = "RGB True-Color Orthomosaic"
+)
+```
+
+### Fully interactive RGB composite
+
+Use the map below to zoom, pan, switch layers, and click any location. The clicked pixel's Red, Green, and Blue values are displayed beneath the map.
+
+```{r rgb-map-ui, echo=FALSE}
+leafletOutput("rgb_composite_map", height = "620px")
+uiOutput("rgb_pixel_readout")
+```
+
+```{r rgb-map-server, context="server", echo=FALSE}
+output$rgb_composite_map <- renderLeaflet({
+  leaflet(options = leafletOptions(preferCanvas = TRUE)) |>
+    addProviderTiles(providers$CartoDB.Positron, group = "Light basemap") |>
+    addProviderTiles(providers$Esri.WorldImagery, group = "Satellite") |>
+    leafem::addRasterRGB(
+      rgb_raw,
+      r = 1,
+      g = 2,
+      b = 3,
+      quantiles = c(0.02, 0.98),
+      opacity = 1,
+      group = "RGB orthomosaic",
+      project = TRUE
+    ) |>
+    addLayersControl(
+      baseGroups = c("Light basemap", "Satellite"),
+      overlayGroups = "RGB orthomosaic",
+      options = layersControlOptions(collapsed = FALSE)
+    )
+})
+
+rgb_clicked_values <- reactive({
+  click <- input$rgb_composite_map_click
+  shiny::req(click)
+
+  coordinates <- matrix(c(click$lng, click$lat), ncol = 2)
+
+  # Leaflet clicks are longitude/latitude. Transform to raster CRS when needed.
+  click_point <- terra::vect(coordinates, type = "points", crs = "EPSG:4326")
+  if (!terra::same.crs(click_point, rgb_raw)) {
+    click_point <- terra::project(click_point, terra::crs(rgb_raw))
+  }
+
+  extracted <- terra::extract(rgb_raw, click_point)
+  if (nrow(extracted) == 0) return(NULL)
+
+  as.numeric(extracted[1, c("Red", "Green", "Blue")])
+})
+
+output$rgb_pixel_readout <- renderUI({
+  values <- rgb_clicked_values()
+
+  if (is.null(values) || any(!is.finite(values))) {
+    return(div(class = "alert alert-info", "Click a valid pixel inside the RGB orthomosaic."))
+  }
+
+  gli_value <- (2 * values[2] - values[1] - values[3]) /
+    (2 * values[2] + values[1] + values[3])
+
+  fluidRow(
+    column(3, div(class = "well", strong("Red"), br(), round(values[1], 3))),
+    column(3, div(class = "well", strong("Green"), br(), round(values[2], 3))),
+    column(3, div(class = "well", strong("Blue"), br(), round(values[3], 3))),
+    column(3, div(class = "well", strong("GLI"), br(), round(gli_value, 4)))
+  )
+})
+```
+
+---
+
+## Activity 4: Build a vegetation index formula interactively
+
+Instead of only copying a finished formula, construct an index by selecting bands, coefficients, and mathematical operations. The general expression is:
+
+\[
+Index = \frac{(a \times Band_A)\; operator_1\; (b \times Band_B)\; operator_2\; (c \times Band_C)}{(d \times Band_D)\; operator_3\; (e \times Band_E)\; operator_4\; (f \times Band_F)}
+\]
+
+For GLI, configure the builder as:
+
+```text
+Numerator:   (2 × Green) − (1 × Red) − (1 × Blue)
+Denominator: (2 × Green) + (1 × Red) + (1 × Blue)
+```
+
+```{r formula-builder-ui, echo=FALSE}
+wellPanel(
+  h4("Numerator"),
+  fluidRow(
+    column(2, numericInput("num_a", "Coefficient a", 2, step = 1)),
+    column(2, selectInput("num_band_a", "Band A", c("Red", "Green", "Blue"), "Green")),
+    column(2, selectInput("num_op_1", "Operator 1", c("+", "-", "*", "/"), "-")),
+    column(2, numericInput("num_b", "Coefficient b", 1, step = 1)),
+    column(2, selectInput("num_band_b", "Band B", c("Red", "Green", "Blue"), "Red")),
+    column(2, selectInput("num_op_2", "Operator 2", c("+", "-", "*", "/"), "-"))
+  ),
+  fluidRow(
+    column(2, numericInput("num_c", "Coefficient c", 1, step = 1)),
+    column(2, selectInput("num_band_c", "Band C", c("Red", "Green", "Blue"), "Blue"))
+  ),
+  hr(),
+  h4("Denominator"),
+  fluidRow(
+    column(2, numericInput("den_a", "Coefficient d", 2, step = 1)),
+    column(2, selectInput("den_band_a", "Band D", c("Red", "Green", "Blue"), "Green")),
+    column(2, selectInput("den_op_1", "Operator 3", c("+", "-", "*", "/"), "+")),
+    column(2, numericInput("den_b", "Coefficient e", 1, step = 1)),
+    column(2, selectInput("den_band_b", "Band E", c("Red", "Green", "Blue"), "Red")),
+    column(2, selectInput("den_op_2", "Operator 4", c("+", "-", "*", "/"), "+"))
+  ),
+  fluidRow(
+    column(2, numericInput("den_c", "Coefficient f", 1, step = 1)),
+    column(2, selectInput("den_band_c", "Band F", c("Red", "Green", "Blue"), "Blue"))
+  ),
+  actionButton("calculate_custom_index", "Calculate Index", class = "btn-primary")
+)
+
+uiOutput("formula_preview")
+uiOutput("formula_feedback")
+leafletOutput("custom_index_map", height = "600px")
+plotlyOutput("custom_index_histogram", height = "350px")
+```
+
+```{r formula-builder-server, context="server", echo=FALSE}
+apply_operation <- function(left, operator, right) {
+  switch(
+    operator,
+    "+" = left + right,
+    "-" = left - right,
+    "*" = left * right,
+    "/" = terra::ifel(right == 0, NA, left / right)
+  )
+}
+
+selected_raster_band <- function(name) rgb_raw[[name]]
+
+formula_text <- reactive({
+  paste0(
+    "[(", input$num_a, " × ", input$num_band_a, ") ", input$num_op_1,
+    " (", input$num_b, " × ", input$num_band_b, ") ", input$num_op_2,
+    " (", input$num_c, " × ", input$num_band_c, ")] / [(",
+    input$den_a, " × ", input$den_band_a, ") ", input$den_op_1,
+    " (", input$den_b, " × ", input$den_band_b, ") ", input$den_op_2,
+    " (", input$den_c, " × ", input$den_band_c, ")]"
+  )
+})
+
+output$formula_preview <- renderUI({
+  div(class = "alert alert-info", strong("Current formula: "), formula_text())
+})
+
+custom_index <- eventReactive(input$calculate_custom_index, {
+  numerator_1 <- input$num_a * selected_raster_band(input$num_band_a)
+  numerator_2 <- input$num_b * selected_raster_band(input$num_band_b)
+  numerator_3 <- input$num_c * selected_raster_band(input$num_band_c)
+  numerator <- apply_operation(numerator_1, input$num_op_1, numerator_2)
+  numerator <- apply_operation(numerator, input$num_op_2, numerator_3)
+
+  denominator_1 <- input$den_a * selected_raster_band(input$den_band_a)
+  denominator_2 <- input$den_b * selected_raster_band(input$den_band_b)
+  denominator_3 <- input$den_c * selected_raster_band(input$den_band_c)
+  denominator <- apply_operation(denominator_1, input$den_op_1, denominator_2)
+  denominator <- apply_operation(denominator, input$den_op_2, denominator_3)
+
+  result <- terra::ifel(denominator == 0, NA, numerator / denominator)
+  names(result) <- "Custom_Index"
+  result
+})
+
+is_gli_formula <- reactive({
+  identical(input$num_band_a, "Green") && input$num_a == 2 &&
+    identical(input$num_op_1, "-") && identical(input$num_band_b, "Red") && input$num_b == 1 &&
+    identical(input$num_op_2, "-") && identical(input$num_band_c, "Blue") && input$num_c == 1 &&
+    identical(input$den_band_a, "Green") && input$den_a == 2 &&
+    identical(input$den_op_1, "+") && identical(input$den_band_b, "Red") && input$den_b == 1 &&
+    identical(input$den_op_2, "+") && identical(input$den_band_c, "Blue") && input$den_c == 1
+})
+
+output$formula_feedback <- renderUI({
+  shiny::req(input$calculate_custom_index > 0)
+  if (is_gli_formula()) {
+    div(class = "alert alert-success", "Correct. The constructed expression is the Green Leaf Index.")
+  } else {
+    div(class = "alert alert-warning", "The custom index was calculated, but the selected expression is not the standard GLI formula.")
+  }
+})
+
+output$custom_index_map <- renderLeaflet({
+  index <- custom_index()
+  values <- terra::values(index, mat = FALSE)
+  finite_values <- values[is.finite(values)]
+  shiny::validate(shiny::need(length(finite_values) > 0, "The selected formula did not produce finite values."))
+  palette <- colorNumeric("RdYlGn", domain = finite_values, na.color = "transparent")
+
+  leaflet(options = leafletOptions(preferCanvas = TRUE)) |>
+    addProviderTiles(providers$CartoDB.Positron, group = "Light basemap") |>
+    leaflet::addRasterImage(
+      index,
+      colors = palette,
+      opacity = 0.9,
+      project = TRUE,
+      group = "Calculated index"
+    ) |>
+    addLayersControl(
+      baseGroups = "Light basemap",
+      overlayGroups = "Calculated index",
+      options = layersControlOptions(collapsed = FALSE)
+    ) |>
+    addLegend(pal = palette, values = finite_values, title = "Index value")
+})
+
+output$custom_index_histogram <- renderPlotly({
+  values <- terra::values(custom_index(), mat = FALSE)
+  values <- values[is.finite(values)]
+  plot_ly(x = values, type = "histogram", nbinsx = 80, name = "Custom index") |>
+    plotly::layout(
+      title = "Calculated Index Distribution",
+      xaxis = list(title = "Index value"),
+      yaxis = list(title = "Pixel count")
+    )
+})
+```
+
+### Run the equivalent R code
+
+After building the formula interactively, run the reproducible R code yourself.
+
+```{r calculate-gli, exercise=TRUE}
+rgb <- rgb_raw
+names(rgb) <- c("Red", "Green", "Blue")
+
+red <- rgb[["Red"]]
+green <- rgb[["Green"]]
+blue <- rgb[["Blue"]]
+
+gli <- (2 * green - red - blue) / (2 * green + red + blue)
+names(gli) <- "GLI"
+
+plot(gli, col = hcl.colors(100, "RdYlGn"), main = "Green Leaf Index")
+terra::global(gli, c("min", "mean", "max"), na.rm = TRUE)
+```
+
+---
+
+## Activity 5: Calculate an Otsu threshold
+
+Otsu thresholding separates the GLI distribution into vegetation and background classes by maximizing between-class variance.
+
+```{r otsu-threshold, exercise=TRUE}
+gli <- safe_gli(rgb_raw[["Red"]], rgb_raw[["Green"]], rgb_raw[["Blue"]])
+names(gli) <- "GLI"
+
+otsu_threshold <- calculate_otsu_threshold(gli)
+otsu_threshold
+```
+
+```{r otsu-display, echo=FALSE}
+verbatimTextOutput("otsu_value")
+plotOutput("otsu_histogram", height = "380px")
+```
+
+```{r otsu-display-server, context="server", echo=FALSE}
+otsu_reactive <- reactive({
+  gli_layer <- safe_gli(
+    red = rgb_raw[["Red"]],
+    green = rgb_raw[["Green"]],
+    blue = rgb_raw[["Blue"]]
+  )
+  names(gli_layer) <- "GLI"
+  calculate_otsu_threshold(gli_layer)
+})
+
+output$otsu_value <- renderText({
+  paste("Calculated Otsu GLI threshold:", round(otsu_reactive(), 4))
+})
+
+output$otsu_histogram <- renderPlot({
+  gli_layer <- safe_gli(
+    red = rgb_raw[["Red"]],
+    green = rgb_raw[["Green"]],
+    blue = rgb_raw[["Blue"]]
+  )
+  values <- terra::values(gli_layer, mat = FALSE)
+  values <- values[is.finite(values)]
+
+  hist(
+    values,
+    breaks = 80,
+    col = "grey80",
+    border = "white",
+    main = "GLI Distribution and Otsu Threshold",
+    xlab = "GLI"
+  )
+  abline(v = otsu_reactive(), col = "red", lwd = 3, lty = 2)
+  legend(
+    "topright",
+    legend = paste("Threshold =", round(otsu_reactive(), 4)),
+    col = "red",
+    lty = 2,
+    lwd = 3
+  )
+})
+```
+
+---
+
+## Activity 6: Create a binary vegetation mask
+
+Pixels with GLI greater than the Otsu threshold are classified as vegetation.
+
+```{r binary-mask, exercise=TRUE}
+vegetation_mask <- terra::ifel(gli > otsu_threshold, 1, 0)
+names(vegetation_mask) <- "Vegetation_Mask"
+
+plot(
+  vegetation_mask,
+  col = c("grey85", "forestgreen"),
+  main = "Binary Vegetation Mask"
+)
+```
+
+```text
+0 = non-vegetation
+1 = vegetation
+```
+
+---
+
+## Activity 7: Mask the RGB orthomosaic and GLI layer
+
+```{r apply-mask, exercise=TRUE}
+vegetation_only_mask <- terra::ifel(vegetation_mask == 1, 1, NA)
+
+vegetation_rgb <- rgb * vegetation_only_mask
+vegetation_gli <- terra::ifel(vegetation_mask == 1, gli, NA)
+names(vegetation_gli) <- "Vegetation_GLI"
+
+terra::plotRGB(
+  vegetation_rgb,
+  r = 1,
+  g = 2,
+  b = 3,
+  stretch = "lin",
+  main = "Vegetation-Only RGB"
+)
+
+plot(
+  vegetation_gli,
+  col = hcl.colors(100, "YlGn"),
+  main = "Vegetation-Only GLI"
+)
+```
+
+### Compare the distributions
+
+```{r compare-histograms, exercise=TRUE}
+all_values <- terra::values(gli, mat = FALSE)
+vegetation_values <- terra::values(vegetation_gli, mat = FALSE)
+
+par(mfrow = c(1, 2))
+hist(all_values, breaks = 80, main = "All GLI Pixels", xlab = "GLI")
+hist(vegetation_values, breaks = 80, main = "Vegetation GLI", xlab = "GLI")
+par(mfrow = c(1, 1))
+```
+
+---
+
+## Activity 8: Overlay experimental plot boundaries
+
+```{r overlay-plots, exercise=TRUE}
+plots <- make_aligned_plots(vegetation_gli, plots_raw)
+
+plot(
+  vegetation_gli,
+  col = hcl.colors(100, "YlGn"),
+  main = "Vegetation GLI with Plot Boundaries"
+)
+plot(plots, add = TRUE, border = "black", lwd = 1.5)
+```
+
+### Interactive overlay
+
+```{r plot-overlay-ui, echo=FALSE}
+leafletOutput("plot_overlay_map", height = "560px")
+```
+
+```{r plot-overlay-server, context="server", echo=FALSE}
+analysis_objects <- reactive({
+  gli <- safe_gli(
+    red = rgb_raw[["Red"]],
+    green = rgb_raw[["Green"]],
+    blue = rgb_raw[["Blue"]]
+  )
+  names(gli) <- "GLI"
+  threshold <- calculate_otsu_threshold(gli)
+  mask <- terra::ifel(gli > threshold, 1, 0)
+  names(mask) <- "Vegetation_Mask"
+  vegetation_gli <- terra::ifel(mask == 1, gli, NA)
+  names(vegetation_gli) <- "Vegetation_GLI"
+  plots <- make_aligned_plots(vegetation_gli, plots_raw)
+
+  list(
+    gli = gli,
+    threshold = threshold,
+    mask = mask,
+    vegetation_gli = vegetation_gli,
+    plots = plots
+  )
+})
+
+output$plot_overlay_map <- renderLeaflet({
+  obj <- analysis_objects()
+  values <- terra::values(obj$vegetation_gli, mat = FALSE)
+  finite_values <- values[is.finite(values)]
+  pal <- colorNumeric("YlGn", domain = finite_values, na.color = "transparent")
+  plot_sf <- sf::st_as_sf(obj$plots)
+
+  all_gli_values <- terra::values(obj$gli, mat = FALSE)
+  all_gli_values <- all_gli_values[is.finite(all_gli_values)]
+  all_gli_pal <- colorNumeric("RdYlGn", domain = all_gli_values, na.color = "transparent")
+  mask_pal <- colorFactor(c("transparent", "forestgreen"), domain = c(0, 1), na.color = "transparent")
+
+  leaflet(options = leafletOptions(preferCanvas = TRUE)) |>
+    addProviderTiles(providers$CartoDB.Positron, group = "Light basemap") |>
+    addProviderTiles(providers$Esri.WorldImagery, group = "Satellite") |>
+    leaflet::addRasterImage(
+      obj$gli,
+      colors = all_gli_pal,
+      opacity = 0.8,
+      project = TRUE,
+      group = "All-pixel GLI"
+    ) |>
+    leaflet::addRasterImage(
+      obj$mask,
+      colors = mask_pal,
+      opacity = 0.65,
+      project = TRUE,
+      group = "Vegetation mask"
+    ) |>
+    leaflet::addRasterImage(
+      obj$vegetation_gli,
+      colors = pal,
+      opacity = 0.9,
+      project = TRUE,
+      group = "Vegetation GLI"
+    ) |>
+    addPolygons(
+      data = sf::st_transform(plot_sf, 4326),
+      color = "#111827",
+      weight = 1.5,
+      fill = FALSE,
+      label = as.character(plot_sf[[plot_id_field]]),
+      group = "Plot boundaries"
+    ) |>
+    addLayersControl(
+      baseGroups = c("Light basemap", "Satellite"),
+      overlayGroups = c("All-pixel GLI", "Vegetation mask", "Vegetation GLI", "Plot boundaries"),
+      options = layersControlOptions(collapsed = FALSE)
+    ) |>
+    addLegend(pal = pal, values = finite_values, title = "Vegetation GLI")
+})
+```
+
+---
+
+## Activity 9: Extract plot-level crop traits
+
+For each plot, calculate mean vegetation GLI, GLI standard deviation, and canopy cover percentage.
+
+```{r extract-traits, exercise=TRUE}
+plots <- make_aligned_plots(vegetation_gli, plots_raw)
+
+mean_gli <- terra::extract(
+  vegetation_gli,
+  plots,
+  fun = mean,
+  na.rm = TRUE,
+  exact = TRUE
+)
+
+sd_gli <- terra::extract(
+  vegetation_gli,
+  plots,
+  fun = sd,
+  na.rm = TRUE,
+  exact = TRUE
+)
+
+canopy_cover <- terra::extract(
+  vegetation_mask,
+  plots,
+  fun = mean,
+  na.rm = TRUE,
+  exact = TRUE
+)
+
+plot_level_traits <- data.frame(
+  plot_id = as.data.frame(plots)[[plot_id_field]],
+  mean_vegetation_gli = mean_gli[, 2],
+  sd_vegetation_gli = sd_gli[, 2],
+  canopy_cover_percent = 100 * canopy_cover[, 2]
+)
+
+head(plot_level_traits)
+```
+
+### Final interactive trait table
+
+```{r final-table-ui, echo=FALSE}
+DTOutput("trait_table")
+downloadButton("download_traits", "Download Plot-Level Crop Traits")
+```
+
+```{r final-table-server, context="server", echo=FALSE}
+plot_traits_reactive <- reactive({
+  obj <- analysis_objects()
+  plots <- obj$plots
+
+  mean_result <- terra::extract(
+    obj$vegetation_gli, plots,
+    fun = mean, na.rm = TRUE, exact = TRUE
+  )
+  sd_result <- terra::extract(
+    obj$vegetation_gli, plots,
+    fun = sd, na.rm = TRUE, exact = TRUE
+  )
+  cover_result <- terra::extract(
+    obj$mask, plots,
+    fun = mean, na.rm = TRUE, exact = TRUE
+  )
+
+  data.frame(
+    plot_id = as.data.frame(plots)[[plot_id_field]],
+    mean_vegetation_gli = round(mean_result[, 2], 4),
+    sd_vegetation_gli = round(sd_result[, 2], 4),
+    canopy_cover_percent = round(100 * cover_result[, 2], 2),
+    stringsAsFactors = FALSE
+  )
+})
+
+output$trait_table <- renderDT({
+  datatable(
+    plot_traits_reactive(),
+    rownames = FALSE,
+    filter = "top",
+    options = list(pageLength = 10, scrollX = TRUE)
+  )
+})
+
+output$download_traits <- downloadHandler(
+  filename = function() "plot_level_rgb_gli_traits.csv",
+  content = function(file) {
+    write.csv(plot_traits_reactive(), file, row.names = FALSE, na = "")
+  }
+)
+```
+
+---
+
+## Activity 10: Interpret plot-level variation
+
+```{r trait-summary-ui, echo=FALSE}
+plotlyOutput("plot_trait_chart", height = "480px")
+verbatimTextOutput("top_plot_summary")
+```
+
+```{r trait-summary-server, context="server", echo=FALSE}
+output$plot_trait_chart <- renderPlotly({
+  traits <- plot_traits_reactive()
+
+  plot_ly(
+    traits,
+    x = ~reorder(as.character(plot_id), mean_vegetation_gli),
+    y = ~mean_vegetation_gli,
+    type = "bar",
+    marker = list(color = ~mean_vegetation_gli, colorscale = "Viridis")
+  ) |>
+    plotly::layout(
+      title = "Mean Vegetation GLI by Plot",
+      xaxis = list(title = "Plot ID", tickangle = -45),
+      yaxis = list(title = "Mean vegetation GLI")
+    )
+})
+
+output$top_plot_summary <- renderText({
+  traits <- plot_traits_reactive()
+  valid_gli <- which(is.finite(traits$mean_vegetation_gli))
+  valid_cover <- which(is.finite(traits$canopy_cover_percent))
+
+  if (length(valid_gli) == 0 || length(valid_cover) == 0) {
+    return("No valid plot-level output was available.")
+  }
+
+  best_gli <- traits[valid_gli[which.max(traits$mean_vegetation_gli[valid_gli])], ]
+  best_cover <- traits[valid_cover[which.max(traits$canopy_cover_percent[valid_cover])], ]
+
+  paste0(
+    "Highest mean vegetation GLI: ", best_gli$plot_id,
+    " (", best_gli$mean_vegetation_gli, ")\n",
+    "Highest canopy cover: ", best_cover$plot_id,
+    " (", best_cover$canopy_cover_percent, "%)"
+  )
+})
+```
+
+### Final reflection
+
+1. Why is vegetation masking useful before calculating plot-level mean GLI?
+2. How can soil, residue, and shadows influence an unmasked plot mean?
+3. Do plots with the greatest canopy cover also have the greatest mean vegetation GLI?
+4. Which additional RGB traits could be extracted from the same plot boundaries?
+
+## Workflow completed
+
+You transformed RGB orthomosaic pixels into plot-level crop traits suitable for statistical analysis, genotype comparison, and crop-management decisions.
