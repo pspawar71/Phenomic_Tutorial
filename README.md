@@ -24,12 +24,6 @@ data/rgb_orthomosaic.tif
 data/plot_boundaries.geojson
 ```
 
-## Student Binder link
-
-```text
-https://mybinder.org/v2/gh/pspawar71/Phenomic_Tutorial/HEAD?urlpath=proxy/3838/
-```
-
 ## Instructor RStudio link
 
 ```text
