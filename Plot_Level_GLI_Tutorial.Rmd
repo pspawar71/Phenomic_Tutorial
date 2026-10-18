@@ -410,22 +410,192 @@ print(plot_level_traits)
 cat("Trait table saved to:", trait_table_path, "\n")
 ```
 
-### Plot mean vegetation GLI
+---
 
-```{r plot-traits, exercise=TRUE}
-if (!file.exists(trait_table_path)) stop("Run Activity 9 first. Trait table is missing.")
+## Activity 10: Mean Vegetation GLI Heatmap
+
+In this activity, visualize mean vegetation GLI for each study plot by overlaying transparent colors on the RGB orthomosaic.
+
+```{r activity-10-gli-heatmap, exercise=TRUE, exercise.timelimit=300}
+if (!file.exists(trait_table_path)) {
+  stop("Run the plot-level trait extraction activity first.")
+}
+
 plot_level_traits <- read.csv(trait_table_path, stringsAsFactors = FALSE)
-barplot(
-  plot_level_traits$mean_vegetation_gli,
-  names.arg = plot_level_traits$plot_id,
-  las = 2,
-  col = "forestgreen",
-  border = NA,
-  main = "Mean Vegetation GLI by Plot",
-  xlab = "Plot ID",
-  ylab = "Mean vegetation GLI"
+
+# Align polygons with the RGB raster
+plots_aligned <- align_plots(rgb_raw, plots_raw)
+plots_sf <- sf::st_as_sf(plots_aligned)
+
+plots_sf$plot_id <- as.character(plots_sf[[plot_id_field]])
+plot_level_traits$plot_id <- as.character(plot_level_traits$plot_id)
+
+plots_heatmap <- merge(
+  plots_sf,
+  plot_level_traits[, c("plot_id", "mean_vegetation_gli")],
+  by = "plot_id",
+  all.x = TRUE,
+  sort = FALSE
 )
+
+gli <- plots_heatmap$mean_vegetation_gli
+
+if (all(is.na(gli))) stop("No matching mean GLI values found.")
+
+gli_range <- range(gli, na.rm = TRUE)
+heat_cols <- hcl.colors(100, "YlGn")
+
+bin <- rep(NA_integer_, length(gli))
+valid <- !is.na(gli)
+
+if (diff(gli_range) > 0) {
+  bin[valid] <- cut(
+    gli[valid],
+    breaks = seq(gli_range[1], gli_range[2], length.out = 101),
+    include.lowest = TRUE,
+    labels = FALSE
+  )
+} else {
+  bin[valid] <- 50
+}
+
+# Reserve space on the right for the legend
+par(mar = c(4, 4, 4, 8), xpd = NA)
+
+terra::plotRGB(
+  rgb_raw,
+  r = 1, g = 2, b = 3,
+  stretch = "lin",
+  main = "Mean Vegetation GLI by Plot"
+)
+
+plot(
+  sf::st_geometry(plots_heatmap),
+  add = TRUE,
+  col = grDevices::adjustcolor(heat_cols[bin], alpha.f = 0.60),
+  border = "white",
+  lwd = 1
+)
+
+# Label each plot with its mean GLI
+label_points <- sf::st_point_on_surface(plots_heatmap)
+coords <- sf::st_coordinates(label_points)
+
+text(
+  coords[, 1], coords[, 2],
+  labels = ifelse(valid, sprintf("%.3f", gli), "NA"),
+  cex = 0.8,
+  font = 2,
+  col = "black"
+)
+
+# Legend on the right
+legend(
+  "right",
+  inset = c(-0.28, 0),
+  legend = sprintf("%.3f", seq(gli_range[1], gli_range[2], length.out = 5)),
+  fill = heat_cols[round(seq(1, 100, length.out = 5))],
+  title = "Mean GLI",
+  bty = "n",
+  cex = 0.8
+)
+
+par(mar = c(5.1, 4.1, 4.1, 2.1), xpd = FALSE)
 ```
+
+
+## Activity 11: Canopy Cover Heatmap
+
+```{r activity-11-canopy-heatmap, exercise=TRUE, exercise.timelimit=300}
+if (!file.exists(trait_table_path)) {
+  stop("Run the plot-level trait extraction activity first.")
+}
+
+plot_level_traits <- read.csv(trait_table_path, stringsAsFactors = FALSE)
+
+# Align polygons with the RGB raster
+plots_aligned <- align_plots(rgb_raw, plots_raw)
+plots_sf <- sf::st_as_sf(plots_aligned)
+
+plots_sf$plot_id <- as.character(plots_sf[[plot_id_field]])
+plot_level_traits$plot_id <- as.character(plot_level_traits$plot_id)
+
+plots_heatmap <- merge(
+  plots_sf,
+  plot_level_traits[, c("plot_id", "canopy_cover_percent")],
+  by = "plot_id",
+  all.x = TRUE,
+  sort = FALSE
+)
+
+canopy <- plots_heatmap$canopy_cover_percent
+
+if (all(is.na(canopy))) stop("No matching canopy cover values found.")
+
+canopy_range <- range(canopy, na.rm = TRUE)
+heat_cols <- hcl.colors(100, "Greens")
+
+bin <- rep(NA_integer_, length(canopy))
+valid <- !is.na(canopy)
+
+if (diff(canopy_range) > 0) {
+  bin[valid] <- cut(
+    canopy[valid],
+    breaks = seq(canopy_range[1], canopy_range[2], length.out = 101),
+    include.lowest = TRUE,
+    labels = FALSE
+  )
+} else {
+  bin[valid] <- 50
+}
+
+# Reserve space on the right for the legend
+par(mar = c(4, 4, 4, 8), xpd = NA)
+
+terra::plotRGB(
+  rgb_raw,
+  r = 1, g = 2, b = 3,
+  stretch = "lin",
+  main = "Canopy Cover by Plot"
+)
+
+plot(
+  sf::st_geometry(plots_heatmap),
+  add = TRUE,
+  col = grDevices::adjustcolor(heat_cols[bin], alpha.f = 0.60),
+  border = "white",
+  lwd = 1
+)
+
+# Label each plot with canopy cover percentage
+label_points <- sf::st_point_on_surface(plots_heatmap)
+coords <- sf::st_coordinates(label_points)
+
+text(
+  coords[, 1], coords[, 2],
+  labels = ifelse(valid, sprintf("%.1f%%", canopy), "NA"),
+  cex = 0.8,
+  font = 2,
+  col = "black"
+)
+
+# Legend on the right
+legend(
+  "right",
+  inset = c(-0.28, 0),
+  legend = paste0(
+    round(seq(canopy_range[1], canopy_range[2], length.out = 5), 1),
+    "%"
+  ),
+  fill = heat_cols[round(seq(1, 100, length.out = 5))],
+  title = "Canopy cover",
+  bty = "n",
+  cex = 0.8
+)
+
+par(mar = c(5.1, 4.1, 4.1, 2.1), xpd = FALSE)
+```
+
 
 ## Workflow complete
 
