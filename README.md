@@ -16,7 +16,7 @@ Install packages with `install.R`.
 Use this link after uploading the repository to GitHub:
 
 ```text
-https://mybinder.org/v2/gh/pspawar71/remote-sensing-htp-binder/main?urlpath=rstudio
+https://mybinder.org/v2/gh/pspawar71/Phenomic_Tutorial/main?urlpath=rstudio
 ```
 
 Students should open `RGB_GLI_Plot_Traits.Rmd` and run chunks from top to bottom. Binder sessions are temporary, so download the CSV in `outputs/` before closing the session.
