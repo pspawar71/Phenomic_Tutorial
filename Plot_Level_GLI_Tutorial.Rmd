@@ -294,7 +294,71 @@ cat("Vegetation-only GLI saved to:", vegetation_gli_path, "\n")
 
 ---
 
-## Activity 8: Overlay plot boundaries
+## Activity 8: Inspect and plot vector plots with IDs
+
+Inspect the plot vector data, examine its attributes and coordinate reference system (CRS), and visualize the polygons with their `plot_id` labels.
+
+### Step 1: Inspect the vector data
+
+```{r inspect-vector, exercise=TRUE, exercise.timelimit=300}
+if (!exists("plots_raw")) stop("Plot vector data are missing.")
+
+# Inspect the vector object
+print(plots_raw)
+
+# Inspect attribute names and records
+names(plots_raw)
+head(as.data.frame(plots_raw))
+
+# Check geometry type, feature count, and CRS
+terra::geomtype(plots_raw)
+nrow(plots_raw)
+terra::crs(plots_raw)
+
+# Check for plot_id
+if (!"plot_id" %in% names(plots_raw)) {
+  stop("The plot_id attribute is missing.")
+}
+```
+
+### Step 2: Plot vector polygons with plot_id labels
+
+```{r plot-vector-labels, exercise=TRUE, exercise.timelimit=300}
+# Plot the vector polygons
+plot(
+  plots_raw,
+  col = "lightgreen",
+  border = "darkgreen",
+  main = "Study Plots with Plot IDs"
+)
+
+# Calculate label positions inside polygons
+label_points <- terra::centroids(plots_raw, inside = TRUE)
+
+# Extract label coordinates
+coords <- terra::crds(label_points)
+
+# Add plot_id labels
+text(
+  x = coords[, 1],
+  y = coords[, 2],
+  labels = plots_raw$plot_id,
+  cex = 0.8,
+  font = 2
+)
+```
+
+### Questions
+
+1. How many plots are present in the dataset?
+2. What information is stored in the `plot_id`, `Range`, and `Row` attributes?
+3. Why should we inspect vector data before overlaying it on a raster?
+
+---
+
+---
+
+## Activity 9: Overlay plot boundaries
 
 ```{r plot-overlay, exercise=TRUE, exercise.timelimit=300}
 if (!file.exists(vegetation_gli_path)) stop("Run Activity 7 first. Vegetation GLI is missing.")
@@ -306,7 +370,7 @@ plot(plots, add = TRUE, border = "black", lwd = 1.5)
 
 ---
 
-## Activity 9: Extract and save plot-level traits
+## Activity 10: Extract and save plot-level traits
 
 This activity reads the saved raster outputs. GLI is not recalculated.
 
