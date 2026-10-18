@@ -5,19 +5,16 @@ RUN Rscript /tmp/install.R
 
 ARG NB_USER=jovyan
 ARG NB_UID=1000
-
 ENV APP_HOME=/home/pawar
 
 USER root
 
 RUN mkdir -p ${APP_HOME} /home/rstudio
+COPY . ${APP_HOME}
 
-COPY --chown=${NB_UID}:users . ${APP_HOME}
-
-RUN chmod +x ${APP_HOME}/start \
-    && chmod -R a+rX ${APP_HOME} \
-    && ln -sfn ${APP_HOME} /home/rstudio/pawar
+# Both the Binder startup user and the RStudio user must be able to
+# create Plot_Level_GLI_Tutorial.html beside the Rmd file.
+RUN chmod -R a+rwX ${APP_HOME}     && chmod +x ${APP_HOME}/start     && ln -sfn ${APP_HOME} /home/rstudio/pawar
 
 USER ${NB_USER}
-
 WORKDIR ${APP_HOME}
