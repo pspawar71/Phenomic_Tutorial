@@ -14,18 +14,86 @@ library(learnr)
 library(shiny)
 library(terra)
 library(sf)
-library(leaflet)
-library(plotly)
-library(DT)
+library(exactextractr)
 
 options(width = 100)
 terraOptions(progress = 0)
 
-orthomosaic_path <- "data/rgb_orthomosaic.tif"
-plots_path <- "data/plot_boundaries.geojson"
+# learnr limits each exercise to 30 seconds by default.
+# Raster calculations can require more time in Binder.
+learnr::tutorial_options(
+  exercise.eval = FALSE,
+  exercise.timelimit = 180
+)
 
-if (!file.exists(orthomosaic_path)) stop("Missing data/rgb_orthomosaic.tif")
-if (!file.exists(plots_path)) stop("Missing data/plot_boundaries.geojson")
+# Resolve paths from the tutorial location instead of the RStudio working directory.
+# Binder stores this project in /home/pawar, while RStudio may start in /home/rstudio.
+# knitr::current_input() can return character(0) during the Shiny server phase.
+# Build the candidate list without passing an empty path to normalizePath().
+current_input_path <- tryCatch(
+  knitr::current_input(dir = TRUE),
+  error = function(e) character(0)
+)
+
+tutorial_candidates <- c(
+  "/home/pawar",
+  getwd()
+)
+
+if (length(current_input_path) == 1 && nzchar(current_input_path)) {
+  tutorial_candidates <- c(
+    tutorial_candidates,
+    dirname(
+      normalizePath(
+        current_input_path,
+        winslash = "/",
+        mustWork = FALSE
+      )
+    )
+  )
+}
+
+tutorial_candidates <- unique(tutorial_candidates)
+
+tutorial_directory <- tutorial_candidates[
+  file.exists(file.path(tutorial_candidates, "data", "rgb_orthomosaic.tif")) &
+    file.exists(file.path(tutorial_candidates, "data", "plot_boundaries.geojson"))
+][1]
+
+if (is.na(tutorial_directory) || !nzchar(tutorial_directory)) {
+  stop(
+    "Could not locate the tutorial data folder. Expected data/rgb_orthomosaic.tif and data/plot_boundaries.geojson."
+  )
+}
+
+orthomosaic_path <- file.path(
+  tutorial_directory,
+  "data",
+  "rgb_orthomosaic.tif"
+)
+
+plots_path <- file.path(
+  tutorial_directory,
+  "data",
+  "plot_boundaries.geojson"
+)
+
+if (!file.exists(orthomosaic_path)) {
+  stop("Missing RGB orthomosaic: ", orthomosaic_path)
+}
+
+if (!file.exists(plots_path)) {
+  stop("Missing plot boundaries: ", plots_path)
+}
+
+output_directory <- file.path(tutorial_directory, "outputs")
+dir.create(output_directory, showWarnings = FALSE, recursive = TRUE)
+
+gli_path <- file.path(output_directory, "gli.tif")
+threshold_path <- file.path(output_directory, "otsu_threshold.rds")
+vegetation_mask_path <- file.path(output_directory, "vegetation_mask.tif")
+vegetation_gli_path <- file.path(output_directory, "vegetation_gli.tif")
+trait_table_path <- file.path(output_directory, "plot_level_rgb_gli_traits.csv")
 
 rgb_raw <- terra::rast(orthomosaic_path)
 plots_raw <- terra::vect(plots_path)
@@ -81,7 +149,7 @@ align_plots <- function(raster, polygons) {
 
 ## Welcome
 
-This tutorial keeps the guided `learnr` interface, Shiny controls, Plotly charts, and one interactive Leaflet **vector** map. Raster data are never sent to Leaflet. RGB bands, RGB composites, GLI, and masks are displayed only with standard `terra` plots.
+This tutorial uses simple exercise chunks that work in both `learnr` and the RStudio Console. All outputs use standard R plots and printed tables. There are no interactive raster maps, vector maps, Plotly charts, or interactive tables.
 
 ### Learning objectives
 
@@ -91,9 +159,9 @@ This tutorial keeps the guided `learnr` interface, Shiny controls, Plotly charts
 4. Apply Otsu thresholding.
 5. Create a vegetation mask.
 6. Mask RGB and GLI layers.
-7. Explore plot polygons in a vector-only Leaflet map.
+7. Overlay plot polygons using a standard R plot.
 8. Extract plot-level mean GLI, GLI variability, and canopy cover.
-9. Download the plot-level trait table.
+9. Export the plot-level trait table as a CSV file.
 
 > The expected band order is Red, Green, Blue.
 
@@ -145,18 +213,13 @@ terra::plotRGB(
 
 ---
 
-## Activity 4: Calculate GLI
+## Activity 4: Calculate and save GLI
 
-\[
-GLI = \frac{2Green - Red - Blue}{2Green + Red + Blue}
-\]
-
-```{r calculate-gli, exercise=TRUE}
+```{r calculate-gli, exercise=TRUE, exercise.timelimit=300}
 rgb <- rgb_raw
 red <- rgb[["Red"]]
 green <- rgb[["Green"]]
 blue <- rgb[["Blue"]]
-
 denominator <- 2 * green + red + blue
 
 gli <- terra::ifel(
@@ -164,234 +227,144 @@ gli <- terra::ifel(
   NA,
   (2 * green - red - blue) / denominator
 )
-
 names(gli) <- "GLI"
 
+terra::writeRaster(gli, gli_path, overwrite = TRUE)
 plot(gli, col = hcl.colors(100, "RdYlGn"), main = "Green Leaf Index")
 terra::global(gli, c("min", "mean", "max"), na.rm = TRUE)
+cat("GLI saved to:", gli_path, "\n")
 ```
 
-### Interactive GLI histogram
+### GLI histogram
 
-```{r gli-histogram-ui, echo=FALSE}
-plotlyOutput("gli_histogram", height = "380px")
-```
-
-```{r gli-histogram-server, context="server", echo=FALSE}
-analysis_objects <- reactive({
-  gli <- safe_gli(rgb_raw[["Red"]], rgb_raw[["Green"]], rgb_raw[["Blue"]])
-  names(gli) <- "GLI"
-  threshold <- calculate_otsu_threshold(gli)
-  mask <- terra::ifel(gli > threshold, 1, 0)
-  names(mask) <- "Vegetation_Mask"
-  vegetation_gli <- terra::ifel(mask == 1, gli, NA)
-  names(vegetation_gli) <- "Vegetation_GLI"
-  plots <- align_plots(vegetation_gli, plots_raw)
-  list(gli = gli, threshold = threshold, mask = mask, vegetation_gli = vegetation_gli, plots = plots)
-})
-
-output$gli_histogram <- renderPlotly({
-  values <- terra::values(analysis_objects()$gli, mat = FALSE)
-  values <- values[is.finite(values)]
-  threshold <- analysis_objects()$threshold
-
-  plotly::plot_ly(
-    x = values,
-    type = "histogram",
-    nbinsx = 80,
-    name = "GLI"
-  ) |>
-    plotly::layout(
-      title = paste("GLI Distribution; Otsu Threshold =", round(threshold, 4)),
-      xaxis = list(title = "GLI"),
-      yaxis = list(title = "Pixel count"),
-      shapes = list(list(
-        type = "line", x0 = threshold, x1 = threshold,
-        y0 = 0, y1 = 1, yref = "paper",
-        line = list(color = "red", width = 3, dash = "dash")
-      ))
-    )
-})
+```{r gli-histogram, exercise=TRUE, exercise.timelimit=300}
+if (!file.exists(gli_path)) stop("Run Activity 4 first. GLI file is missing.")
+gli <- terra::rast(gli_path)
+gli_values <- terra::values(gli, mat = FALSE)
+gli_values <- gli_values[is.finite(gli_values)]
+hist(gli_values, breaks = 80, col = "grey80", border = "white", main = "GLI Distribution", xlab = "GLI")
 ```
 
 ---
 
-## Activity 5: Calculate the Otsu threshold
+## Activity 5: Calculate and save the Otsu threshold
 
-```{r otsu-threshold, exercise=TRUE}
-rgb <- rgb_raw
-gli <- safe_gli(rgb[["Red"]], rgb[["Green"]], rgb[["Blue"]])
-names(gli) <- "GLI"
-
+```{r otsu-threshold, exercise=TRUE, exercise.timelimit=300}
+if (!file.exists(gli_path)) stop("Run Activity 4 first. GLI file is missing.")
+gli <- terra::rast(gli_path)
 otsu_threshold <- calculate_otsu_threshold(gli)
-otsu_threshold
-
+saveRDS(otsu_threshold, threshold_path)
+cat("Otsu GLI threshold:", round(otsu_threshold, 4), "\n")
 values <- terra::values(gli, mat = FALSE)
 values <- values[is.finite(values)]
 hist(values, breaks = 80, main = "GLI and Otsu Threshold", xlab = "GLI")
 abline(v = otsu_threshold, col = "red", lwd = 3, lty = 2)
+cat("Threshold saved to:", threshold_path, "\n")
 ```
 
 ---
 
-## Activity 6: Create the vegetation mask
+## Activity 6: Create and save the vegetation mask
 
-```{r vegetation-mask, exercise=TRUE}
-rgb <- rgb_raw
-gli <- safe_gli(rgb[["Red"]], rgb[["Green"]], rgb[["Blue"]])
-otsu_threshold <- calculate_otsu_threshold(gli)
-
+```{r vegetation-mask, exercise=TRUE, exercise.timelimit=300}
+if (!file.exists(gli_path)) stop("Run Activity 4 first. GLI file is missing.")
+if (!file.exists(threshold_path)) stop("Run Activity 5 first. Threshold file is missing.")
+gli <- terra::rast(gli_path)
+otsu_threshold <- readRDS(threshold_path)
 vegetation_mask <- terra::ifel(gli > otsu_threshold, 1, 0)
 names(vegetation_mask) <- "Vegetation_Mask"
-
+terra::writeRaster(vegetation_mask, vegetation_mask_path, overwrite = TRUE, datatype = "INT1U")
 plot(vegetation_mask, col = c("grey85", "forestgreen"), main = "Binary Vegetation Mask")
+cat("Vegetation mask saved to:", vegetation_mask_path, "\n")
 ```
 
 ---
 
-## Activity 7: Mask RGB and GLI
+## Activity 7: Create and save vegetation-only GLI
 
-```{r mask-rgb-gli, exercise=TRUE}
-rgb <- rgb_raw
-gli <- safe_gli(rgb[["Red"]], rgb[["Green"]], rgb[["Blue"]])
-otsu_threshold <- calculate_otsu_threshold(gli)
-vegetation_mask <- terra::ifel(gli > otsu_threshold, 1, 0)
-
-vegetation_only_mask <- terra::ifel(vegetation_mask == 1, 1, NA)
-vegetation_rgb <- rgb * vegetation_only_mask
+```{r vegetation-gli, exercise=TRUE, exercise.timelimit=300}
+if (!file.exists(gli_path)) stop("Run Activity 4 first. GLI file is missing.")
+if (!file.exists(vegetation_mask_path)) stop("Run Activity 6 first. Vegetation mask is missing.")
+gli <- terra::rast(gli_path)
+vegetation_mask <- terra::rast(vegetation_mask_path)
 vegetation_gli <- terra::ifel(vegetation_mask == 1, gli, NA)
 names(vegetation_gli) <- "Vegetation_GLI"
-
-terra::plotRGB(
-  vegetation_rgb,
-  r = 1, g = 2, b = 3,
-  stretch = "lin",
-  main = "Vegetation-Only RGB"
-)
-
+terra::writeRaster(vegetation_gli, vegetation_gli_path, overwrite = TRUE)
 plot(vegetation_gli, col = hcl.colors(100, "YlGn"), main = "Vegetation-Only GLI")
+cat("Vegetation-only GLI saved to:", vegetation_gli_path, "\n")
 ```
 
 ---
 
-## Activity 8: Explore plot boundaries
+## Activity 8: Overlay plot boundaries
 
-This Leaflet map contains **vector polygons only**. No raster is sent to the browser.
-
-```{r vector-map-ui, echo=FALSE}
-leafletOutput("plot_map", height = "560px")
-```
-
-```{r vector-map-server, context="server", echo=FALSE}
-output$plot_map <- renderLeaflet({
-  plots <- plots_raw
-
-  if (!terra::same.crs(plots, "EPSG:4326")) {
-    plots <- terra::project(plots, "EPSG:4326")
-  }
-
-  plot_sf <- sf::st_as_sf(plots)
-  labels <- as.character(plot_sf[[plot_id_field]])
-
-  leaflet::leaflet(options = leaflet::leafletOptions(preferCanvas = TRUE)) |>
-    leaflet::addProviderTiles(leaflet::providers$Esri.WorldImagery, group = "Satellite") |>
-    leaflet::addProviderTiles(leaflet::providers$CartoDB.Positron, group = "Light map") |>
-    leaflet::addPolygons(
-      data = plot_sf,
-      color = "#111827",
-      weight = 2,
-      opacity = 1,
-      fillColor = "#2ca25f",
-      fillOpacity = 0.15,
-      label = labels,
-      popup = paste0("<b>Plot:</b> ", labels),
-      group = "Plot boundaries"
-    ) |>
-    leaflet::addLayersControl(
-      baseGroups = c("Satellite", "Light map"),
-      overlayGroups = "Plot boundaries",
-      options = leaflet::layersControlOptions(collapsed = FALSE)
-    )
-})
+```{r plot-overlay, exercise=TRUE, exercise.timelimit=300}
+if (!file.exists(vegetation_gli_path)) stop("Run Activity 7 first. Vegetation GLI is missing.")
+vegetation_gli <- terra::rast(vegetation_gli_path)
+plots <- align_plots(vegetation_gli, plots_raw)
+plot(vegetation_gli, col = hcl.colors(100, "YlGn"), main = "Vegetation GLI with Plot Boundaries")
+plot(plots, add = TRUE, border = "black", lwd = 1.5)
 ```
 
 ---
 
-## Activity 9: Extract plot-level traits
+## Activity 9: Extract and save plot-level traits
 
-```{r extract-traits, exercise=TRUE}
-rgb <- rgb_raw
-gli <- safe_gli(rgb[["Red"]], rgb[["Green"]], rgb[["Blue"]])
-otsu_threshold <- calculate_otsu_threshold(gli)
-vegetation_mask <- terra::ifel(gli > otsu_threshold, 1, 0)
-vegetation_gli <- terra::ifel(vegetation_mask == 1, gli, NA)
-names(vegetation_gli) <- "Vegetation_GLI"
+This activity reads the saved raster outputs. GLI is not recalculated.
+
+```{r extract-traits, exercise=TRUE, exercise.timelimit=600}
+if (!file.exists(vegetation_gli_path)) stop("Run Activity 7 first. Vegetation GLI is missing.")
+if (!file.exists(vegetation_mask_path)) stop("Run Activity 6 first. Vegetation mask is missing.")
+vegetation_gli <- terra::rast(vegetation_gli_path)
+vegetation_mask <- terra::rast(vegetation_mask_path)
 plots <- align_plots(vegetation_gli, plots_raw)
 
-mean_result <- terra::extract(vegetation_gli, plots, fun = mean, na.rm = TRUE, exact = TRUE)
-sd_result <- terra::extract(vegetation_gli, plots, fun = sd, na.rm = TRUE, exact = TRUE)
-cover_result <- terra::extract(vegetation_mask, plots, fun = mean, na.rm = TRUE, exact = TRUE)
+# exactextractr uses fractional pixel coverage at plot boundaries.
+plots_sf <- sf::st_as_sf(plots)
 
-plot_level_traits <- data.frame(
-  plot_id = as.data.frame(plots)[[plot_id_field]],
-  mean_vegetation_gli = round(mean_result[, 2], 4),
-  sd_vegetation_gli = round(sd_result[, 2], 4),
-  canopy_cover_percent = round(100 * cover_result[, 2], 2)
+vegetation_gli_stats <- exactextractr::exact_extract(
+  vegetation_gli,
+  plots_sf,
+  fun = c("mean", "stdev"),
+  progress = FALSE
 )
 
-plot_level_traits
+canopy_cover_stats <- exactextractr::exact_extract(
+  vegetation_mask,
+  plots_sf,
+  fun = "mean",
+  progress = FALSE
+)
+
+plot_level_traits <- data.frame(
+  plot_id = plots_sf[[plot_id_field]],
+  mean_vegetation_gli = round(vegetation_gli_stats$mean, 4),
+  sd_vegetation_gli = round(vegetation_gli_stats$stdev, 4),
+  canopy_cover_percent = round(100 * canopy_cover_stats, 2)
+)
+
+write.csv(plot_level_traits, trait_table_path, row.names = FALSE, na = "")
+print(plot_level_traits)
+cat("Trait table saved to:", trait_table_path, "\n")
 ```
 
-### Interactive trait table and Plotly summary
+### Plot mean vegetation GLI
 
-```{r results-ui, echo=FALSE}
-DTOutput("trait_table")
-plotlyOutput("trait_chart", height = "450px")
-downloadButton("download_traits", "Download Plot-Level Traits")
-```
-
-```{r results-server, context="server", echo=FALSE}
-plot_traits <- reactive({
-  obj <- analysis_objects()
-  plots <- obj$plots
-  mean_result <- terra::extract(obj$vegetation_gli, plots, fun = mean, na.rm = TRUE, exact = TRUE)
-  sd_result <- terra::extract(obj$vegetation_gli, plots, fun = sd, na.rm = TRUE, exact = TRUE)
-  cover_result <- terra::extract(obj$mask, plots, fun = mean, na.rm = TRUE, exact = TRUE)
-
-  data.frame(
-    plot_id = as.data.frame(plots)[[plot_id_field]],
-    mean_vegetation_gli = round(mean_result[, 2], 4),
-    sd_vegetation_gli = round(sd_result[, 2], 4),
-    canopy_cover_percent = round(100 * cover_result[, 2], 2)
-  )
-})
-
-output$trait_table <- renderDT({
-  datatable(plot_traits(), rownames = FALSE, filter = "top", options = list(pageLength = 10))
-})
-
-output$trait_chart <- renderPlotly({
-  traits <- plot_traits()
-  plotly::plot_ly(
-    traits,
-    x = ~reorder(as.character(plot_id), mean_vegetation_gli),
-    y = ~mean_vegetation_gli,
-    type = "bar",
-    marker = list(color = ~mean_vegetation_gli, colorscale = "Viridis")
-  ) |>
-    plotly::layout(
-      title = "Mean Vegetation GLI by Plot",
-      xaxis = list(title = "Plot ID", tickangle = -45),
-      yaxis = list(title = "Mean vegetation GLI")
-    )
-})
-
-output$download_traits <- downloadHandler(
-  filename = function() "plot_level_rgb_gli_traits.csv",
-  content = function(file) write.csv(plot_traits(), file, row.names = FALSE, na = "")
+```{r plot-traits, exercise=TRUE}
+if (!file.exists(trait_table_path)) stop("Run Activity 9 first. Trait table is missing.")
+plot_level_traits <- read.csv(trait_table_path, stringsAsFactors = FALSE)
+barplot(
+  plot_level_traits$mean_vegetation_gli,
+  names.arg = plot_level_traits$plot_id,
+  las = 2,
+  col = "forestgreen",
+  border = NA,
+  main = "Mean Vegetation GLI by Plot",
+  xlab = "Plot ID",
+  ylab = "Mean vegetation GLI"
 )
 ```
 
 ## Workflow complete
 
-The tutorial keeps meaningful interactivity while avoiding interactive raster rendering, which reduces browser memory use and package complexity.
+Intermediate outputs are saved in the outputs folder and reused by later activities. No interactive visualization is included.
