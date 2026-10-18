@@ -1,4 +1,20 @@
 #!/bin/bash
 set -e
-R --vanilla -q -e "rmarkdown::run(file='/home/pawar/Plot_Level_GLI_Tutorial.Rmd', shiny_args=list(host='0.0.0.0', port=3838, launch.browser=FALSE))" > /tmp/tutorial.log 2>&1 &
+
+REPO_DIR="$(pwd)"
+TUTORIAL_FILE="${REPO_DIR}/Plot_Level_GLI_Tutorial.Rmd"
+PORT="3838"
+LOG_FILE="/tmp/gli-tutorial.log"
+
+R --vanilla -q -e "
+rmarkdown::run(
+  file = '${TUTORIAL_FILE}',
+  shiny_args = list(
+    host = '0.0.0.0',
+    port = ${PORT},
+    launch.browser = FALSE
+  )
+)
+" > "${LOG_FILE}" 2>&1 &
+
 exec "$@"
