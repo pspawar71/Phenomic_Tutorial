@@ -9,6 +9,7 @@ packages <- c(
   "shiny",
   "learnr",
   "terra",
+  "exactextractr",
   "sf",
   "leaflet",
   "plotly",
