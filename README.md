@@ -2,21 +2,6 @@
 
 A `learnr` tutorial for RGB orthomosaic analysis and plot-level GLI traits.
 
-## Interactivity retained
-
-- Shiny/learnr guided interface
-- Plotly GLI histogram
-- Plotly plot-level chart
-- DT trait table
-- Leaflet vector-only plot-boundary map
-
-## Removed
-
-- `leafem`
-- Interactive RGB rasters
-- Interactive GLI rasters
-- Raster overlays in Leaflet
-
 ## Required data
 
 ```text
