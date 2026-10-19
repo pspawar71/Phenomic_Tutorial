@@ -599,4 +599,4 @@ par(mar = c(5.1, 4.1, 4.1, 2.1), xpd = FALSE)
 
 ## Workflow complete
 
-Intermediate outputs are saved in the outputs folder and reused by later activities. No interactive visualization is included.
+Intermediate outputs are saved in the outputs folder and reused by later activities. 
