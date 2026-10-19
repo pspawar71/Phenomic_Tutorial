@@ -209,7 +209,7 @@ data/plot_boundaries.geojson
 Open the `.Rmd` tutorial file in RStudio and select **Run Document**, or run it from the R console:
 
 ```r
-rmarkdown::run("RGB_GLI_Plot_Traits.Rmd")
+learnr::run_tutorial("pawar/Plot_Level_GLI_Tutorial.Rmd")
 ```
 
 Replace the filename in the command if the tutorial file uses a different name.
