@@ -220,6 +220,11 @@ The tutorial includes path-resolution logic for Binder environments where the pr
 
 [Launch the Phenomic Tutorial repository](https://mybinder.org/v2/gh/pspawar71/Phenomic_Tutorial/HEAD?urlpath=rstudio)
 
+Then run the following command in the RStudio Console:
+```r
+learnr::run_tutorial("pawar/Plot_Level_GLI_Tutorial.Rmd")
+```
+
 When using a temporary Binder session:
 
 1. Start the tutorial from the repository's RStudio environment.
