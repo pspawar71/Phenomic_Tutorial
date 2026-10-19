@@ -218,7 +218,7 @@ Replace the filename in the command if the tutorial file uses a different name.
 
 The tutorial includes path-resolution logic for Binder environments where the project is stored in `/home/pawar` but RStudio may start in `/home/rstudio`.
 
-[Launch the Phenomic Tutorial repository](https://github.com/pspawar71/Phenomic_Tutorial)
+[Launch the Phenomic Tutorial repository](https://mybinder.org/v2/gh/pspawar71/Phenomic_Tutorial/HEAD?urlpath=rstudio)
 
 When using a temporary Binder session:
 
